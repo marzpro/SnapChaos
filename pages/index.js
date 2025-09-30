@@ -1,77 +1,140 @@
-// /pages/index.js
-import { useState } from "react";
-import { useRouter } from "next/router";
-import { getSocket } from "../lib/socket";
+// index.js (Render socket server)
+import express from "express";
+import http from "http";
+import cors from "cors";
+import { Server } from "socket.io";
 
-export default function Lobby() {
-  const [name, setName] = useState("");
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const router = useRouter();
+/**
+ * In-memory room store
+ *
+ * rooms[CODE] = {
+ *   code: "ABCD",
+ *   hostId: "<socket.id>",
+ *   players: [{ id, name }],
+ *   phase: "lobby" | "playing"
+ * }
+ */
+const rooms = {};
+const newCode = () => Math.random().toString(36).slice(2, 6).toUpperCase();
 
-  const createRoom = async () => {
-    setBusy(true);
-    const socket = await getSocket();
-    if (!socket) {
-      alert("Could not connect to the game server.");
-      setBusy(false);
-      return;
-    }
-    socket.emit("create_room", { name: name || "Host" }, ({ code }) => {
-      // IMPORTANT: do NOT disconnect; keep the same socket id for the host
-      router.push(`/room/${code}?name=${encodeURIComponent(name || "Host")}&host=1`);
-    });
-  };
+const app = express();
+app.use(cors());
 
-  const joinRoom = async () => {
-    if (!code) return;
-    router.push(`/room/${code.toUpperCase()}?name=${encodeURIComponent(name || "Player")}`);
-  };
+// health check
+app.get("/", (_req, res) => res.send("SnapChaos Socket OK"));
 
-  return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-xl bg-[#0B1220] border border-white/10 p-6 space-y-5">
-        <h1 className="text-3xl font-bold">SnapChaos</h1>
-        <p className="text-slate-300">
-          Phone-first party photo game. Two modes:{" "}
-          <span className="px-2 py-0.5 rounded bg-white/10">Hot Potato</span> &{" "}
-          <span className="px-2 py-0.5 rounded bg-white/10">Prompt Showdown</span>.
-        </p>
+const server = http.createServer(app);
 
-        <input
-          className="w-full rounded bg-white/5 border border-white/10 px-3 py-2 outline-none"
-          placeholder="Your name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+// IMPORTANT: Restrict CORS to your Vercel URL (and localhost for dev)
+const io = new Server(server, {
+  cors: {
+    origin: ["https://snap-chaos.vercel.app", "http://localhost:3000"],
+    methods: ["GET", "POST"],
+  },
+});
 
-        <button
-          className="w-full rounded bg-blue-600 hover:bg-blue-500 px-4 py-2 font-semibold"
-          disabled={busy}
-          onClick={createRoom}
-        >
-          {busy ? "Creating…" : "Create Room"}
-        </button>
-
-        <div className="flex gap-2 items-center">
-          <input
-            className="flex-1 rounded bg-white/5 border border-white/10 px-3 py-2 outline-none"
-            placeholder="Enter code"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-          />
-          <button
-            className="rounded bg-blue-600 hover:bg-blue-500 px-4 py-2 font-semibold"
-            onClick={joinRoom}
-          >
-            Join
-          </button>
-        </div>
-
-        <p className="text-xs text-slate-400">
-          Open on a TV/laptop for the host screen. Players join with the room code on their phones.
-        </p>
-      </div>
-    </div>
-  );
+function emitRoomUpdate(code) {
+  const room = rooms[code];
+  if (!room) return;
+  io.to(code).emit("room_update", {
+    code,
+    phase: room.phase,
+    // keep sending names for simplicity
+    players: room.players.map((p) => p.name),
+  });
 }
+
+io.on("connection", (socket) => {
+  // Create a room as host
+  socket.on("create_room", ({ name = "Host" } = {}, ack = () => {}) => {
+    const code = newCode();
+    rooms[code] = {
+      code,
+      hostId: socket.id,
+      phase: "lobby",
+      players: [],
+    };
+    socket.join(code);
+    ack({ code });
+    emitRoomUpdate(code);
+  });
+
+  // NEW: allow the arriving room page to claim host
+  socket.on("claim_host", ({ code } = {}, ack = () => {}) => {
+    code = (code || "").toUpperCase();
+    const room = rooms[code];
+    if (!room) return ack({ error: "Room not found" });
+    room.hostId = socket.id;         // <-- re-bind host to this socket
+    socket.join(code);
+    emitRoomUpdate(code);
+    ack({ ok: true });
+  });
+
+  // Join as player
+  socket.on("join_room", ({ code, name = "Player" } = {}, ack = () => {}) => {
+    code = (code || "").toUpperCase();
+    const room = rooms[code];
+    if (!room) return ack({ error: "Room not found" });
+
+    if (!room.players.find((p) => p.id === socket.id)) {
+      room.players.push({
+        id: socket.id,
+        name: String(name).trim() || "Player",
+      });
+    }
+
+    socket.join(code);
+    ack({ ok: true });
+    emitRoomUpdate(code);
+  });
+
+  // Send current state on demand
+  socket.on("get_room_state", ({ code } = {}) => {
+    code = (code || "").toUpperCase();
+    const room = rooms[code];
+    if (!room) return;
+    io.to(socket.id).emit("room_state", {
+      code,
+      phase: room.phase,
+      players: room.players.map((p) => p.name),
+    });
+  });
+
+  // Host starts game
+  socket.on("start_game", ({ code } = {}, ack = () => {}) => {
+    code = (code || "").toUpperCase();
+    const room = rooms[code];
+    if (!room) return ack({ error: "Room not found" });
+    if (socket.id !== room.hostId) return ack({ error: "Only host can start" });
+    if (room.players.length === 0)
+      return ack({ error: "Need at least 1 player" });
+
+    room.phase = "playing";
+    io.to(code).emit("game_started");
+    emitRoomUpdate(code);
+    ack({ ok: true });
+  });
+
+  // Clean up on disconnect
+  socket.on("disconnect", () => {
+    for (const code of Object.keys(rooms)) {
+      const room = rooms[code];
+      // If host left, destroy room
+      if (room.hostId === socket.id) {
+        io.to(code).emit("room_update", { code, phase: "lobby", players: [] });
+        io.in(code).socketsLeave(code);
+        delete rooms[code];
+        continue;
+      }
+      // Remove player
+      const before = room.players.length;
+      room.players = room.players.filter((p) => p.id !== socket.id);
+      if (before !== room.players.length) emitRoomUpdate(code);
+    }
+  });
+});
+
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`Socket server running on :${PORT}`);
+});
