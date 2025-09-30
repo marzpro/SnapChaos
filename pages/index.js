@@ -1,42 +1,53 @@
 // pages/index.js
 import { useState } from 'react';
 import { useRouter } from 'next/router';
-import { io } from 'socket.io-client';
 
-const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8080'; // e.g. https://snapchaos-socket.onrender.com
+// *** Hard-wire your socket URL so there is zero ambiguity ***
+const SOCKET_URL = 'https://snapchaos-socket.onrender.com';
 
 export default function Lobby() {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
+  const [makingRoom, setMakingRoom] = useState(false);
+  const [error, setError] = useState('');
   const router = useRouter();
 
   const createRoom = async () => {
+    setError('');
+    setMakingRoom(true);
     try {
+      const { io } = await import('socket.io-client');
+
       const socket = io(SOCKET_URL, {
         transports: ['websocket'],
         path: '/socket.io',
       });
 
-      // wait until socket is actually connected
       await new Promise((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error('Socket connect timeout')), 8000);
-        socket.on('connect', () => { clearTimeout(t); resolve(); });
-        socket.on('connect_error', (e) => { clearTimeout(t); reject(e); });
+        socket.on('connect', resolve);
+        socket.on('connect_error', reject);
       });
 
-      socket.emit('create_room', { name: name || 'Host' }, ({ code }) => {
+      socket.emit('create_room', { name: name || 'Host' }, (ack) => {
+        if (!ack || !ack.code) {
+          setError(ack?.error || 'No room code returned.');
+          socket.disconnect();
+          setMakingRoom(false);
+          return;
+        }
+        const roomCode = ack.code.toUpperCase();
         socket.disconnect();
-        router.push(`/room/${code}?name=${encodeURIComponent(name || 'Host')}&host=1`);
+        router.push(`/room/${roomCode}?name=${encodeURIComponent(name || 'Host')}&host=1`);
       });
     } catch (e) {
-      alert(`Could not create room: ${e.message || e}`);
+      setError(`Could not connect to socket server. ${e?.message || e}`);
+      setMakingRoom(false);
     }
   };
 
   const joinRoom = () => {
     if (!code) return;
-    router.push(`/room/${code.toUpperCase()}?name=${encodeURIComponent(name || 'Guest')}`);
+    router.push(`/room/${code.toUpperCase()}?name=${encodeURIComponent(name || 'Player')}`);
   };
 
   return (
@@ -55,7 +66,9 @@ export default function Lobby() {
           onChange={(e) => setName(e.target.value)}
         />
 
-        <button className="btn w-full" onClick={createRoom}>Create Room</button>
+        <button className="btn w-full" onClick={createRoom} disabled={makingRoom}>
+          {makingRoom ? 'Creating…' : 'Create Room'}
+        </button>
 
         <div className="flex gap-2 items-center">
           <input
@@ -67,9 +80,11 @@ export default function Lobby() {
           <button className="btn" onClick={joinRoom}>Join</button>
         </div>
 
-        <p className="text-xs text-slate-400">
-          Open on a TV/laptop for the host screen. Players join with the room code on their phones.
-        </p>
+        {error && <div className="text-red-400 text-sm">{error}</div>}
+
+        <div className="text-xs text-slate-400">
+          Socket URL in use: <code>{SOCKET_URL}</code>
+        </div>
       </div>
     </div>
   );

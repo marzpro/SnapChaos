@@ -3,8 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { io } from 'socket.io-client';
 
-const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8080'; // https://snapchaos-socket.onrender.com
+// *** Hard-wire your socket URL so there is zero ambiguity ***
+const SOCKET_URL = 'https://snapchaos-socket.onrender.com';
 
 export default function Room() {
   const router = useRouter();
@@ -21,9 +21,9 @@ export default function Room() {
   const [players, setPlayers] = useState([]);
   const [phase, setPhase] = useState('lobby'); // 'lobby' | 'playing'
   const [status, setStatus] = useState('Waiting for players…');
+  const [lastEvent, setLastEvent] = useState('');
   const socketRef = useRef(null);
 
-  // --- connect & join ---
   useEffect(() => {
     if (!code) return;
 
@@ -35,40 +35,58 @@ export default function Room() {
 
     const onConnect = () => {
       setConnected(true);
+      setStatus('Connected. Joining room…');
       socket.emit('join_room', { code, name }, (ack) => {
-        // optional ack handler from server
-        // console.log('join_room ack:', ack);
+        if (ack?.error) setStatus(`Join failed: ${ack.error}`);
       });
     };
 
     const onConnectError = (err) => {
+      setConnected(false);
       setStatus(`Socket connect error: ${err?.message || err}`);
     };
 
-    // room updates from server
-    const onPlayerList = (list) => setPlayers(list || []);
-    const onGameStarted = (payload) => {
+    const onDisconnect = () => {
+      setConnected(false);
+      setStatus('Disconnected from socket.');
+    };
+
+    const onPlayerList = (list) => {
+      setPlayers(list || []);
+      setStatus(list?.length ? 'All players connected.' : 'Waiting for players…');
+      setLastEvent('player_list');
+    };
+
+    const onGameStarted = () => {
       setPhase('playing');
-      setStatus('Game started! 📸 Get ready…');
-      // If you already have round data coming in, you can store it here:
-      // setRound(payload.round);
+      setStatus('Game started! 📸');
+      setLastEvent('game_started');
+    };
+
+    const onRoomState = (state) => {
+      // optional event if your server emits it
+      if (state?.players) setPlayers(state.players);
+      if (state?.phase) setPhase(state.phase);
+      setLastEvent('room_state');
     };
 
     socket.on('connect', onConnect);
     socket.on('connect_error', onConnectError);
+    socket.on('disconnect', onDisconnect);
     socket.on('player_list', onPlayerList);
     socket.on('game_started', onGameStarted);
+    socket.on('room_state', onRoomState);
 
-    // helpful debug in case something is off:
-    socket.onAny((event, ...args) => {
-      // console.log('[socket event]', event, args);
-    });
+    // tiny debug hook
+    socket.onAny((event) => setLastEvent(event));
 
     return () => {
       socket.off('connect', onConnect);
       socket.off('connect_error', onConnectError);
+      socket.off('disconnect', onDisconnect);
       socket.off('player_list', onPlayerList);
       socket.off('game_started', onGameStarted);
+      socket.off('room_state', onRoomState);
       socket.disconnect();
     };
   }, [code, name]);
@@ -77,8 +95,7 @@ export default function Room() {
     if (!socketRef.current || !connected) return;
     setStatus('Starting game…');
     socketRef.current.emit('start_game', { code }, (ack) => {
-      // optional: if your server returns an ack, show errors here
-      if (ack && ack.error) setStatus(`Could not start: ${ack.error}`);
+      if (ack?.error) setStatus(`Could not start: ${ack.error}`);
     });
   };
 
@@ -98,8 +115,9 @@ export default function Room() {
               <div className="font-semibold">
                 Players: {players.length ? players.join(', ') : '—'}
               </div>
-              <div className="text-sm text-slate-300 mt-1">
-                {status}
+              <div className="text-sm text-slate-300 mt-1">{status}</div>
+              <div className="text-xs text-slate-400 mt-1">
+                Socket: <code>{SOCKET_URL}</code> • {connected ? '✅ connected' : '❌ not connected'} • last event: <code>{lastEvent || '—'}</code>
               </div>
             </div>
 
@@ -113,12 +131,7 @@ export default function Room() {
 
         {phase === 'playing' && (
           <div className="rounded-lg bg-slate-800/60 p-4">
-            <p className="text-lg">
-              🎉 Game is live! (You’ll wire in the real round UI next.)
-            </p>
-            <p className="text-sm text-slate-300 mt-2">
-              If you don’t see this on all devices, the socket events aren’t reaching them — tell me and I’ll adjust the server/client event names.
-            </p>
+            <p className="text-lg">🎉 Game is live! (Round UI comes next.)</p>
           </div>
         )}
       </div>
