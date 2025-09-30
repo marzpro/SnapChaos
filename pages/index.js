@@ -1,90 +1,76 @@
-// pages/index.js
-import { useState } from 'react';
-import { useRouter } from 'next/router';
-
-// *** Hard-wire your socket URL so there is zero ambiguity ***
-const SOCKET_URL = 'https://snapchaos-socket.onrender.com';
+// /pages/index.js
+import { useState } from "react";
+import { useRouter } from "next/router";
+import { getSocket } from "../lib/socket";
 
 export default function Lobby() {
-  const [name, setName] = useState('');
-  const [code, setCode] = useState('');
-  const [makingRoom, setMakingRoom] = useState(false);
-  const [error, setError] = useState('');
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
   const router = useRouter();
 
   const createRoom = async () => {
-    setError('');
-    setMakingRoom(true);
-    try {
-      const { io } = await import('socket.io-client');
-
-      const socket = io(SOCKET_URL, {
-        transports: ['websocket'],
-        path: '/socket.io',
-      });
-
-      await new Promise((resolve, reject) => {
-        socket.on('connect', resolve);
-        socket.on('connect_error', reject);
-      });
-
-      socket.emit('create_room', { name: name || 'Host' }, (ack) => {
-        if (!ack || !ack.code) {
-          setError(ack?.error || 'No room code returned.');
-          socket.disconnect();
-          setMakingRoom(false);
-          return;
-        }
-        const roomCode = ack.code.toUpperCase();
-        socket.disconnect();
-        router.push(`/room/${roomCode}?name=${encodeURIComponent(name || 'Host')}&host=1`);
-      });
-    } catch (e) {
-      setError(`Could not connect to socket server. ${e?.message || e}`);
-      setMakingRoom(false);
+    setBusy(true);
+    const socket = await getSocket();
+    if (!socket) {
+      alert("Could not connect to the game server.");
+      setBusy(false);
+      return;
     }
+    socket.emit("create_room", { name: name || "Host" }, ({ code }) => {
+      // IMPORTANT: do NOT disconnect; keep the same socket id for the host
+      router.push(`/room/${code}?name=${encodeURIComponent(name || "Host")}&host=1`);
+    });
   };
 
-  const joinRoom = () => {
+  const joinRoom = async () => {
     if (!code) return;
-    router.push(`/room/${code.toUpperCase()}?name=${encodeURIComponent(name || 'Player')}`);
+    router.push(`/room/${code.toUpperCase()}?name=${encodeURIComponent(name || "Player")}`);
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="card w-full max-w-md space-y-6">
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-xl bg-[#0B1220] border border-white/10 p-6 space-y-5">
         <h1 className="text-3xl font-bold">SnapChaos</h1>
         <p className="text-slate-300">
-          Phone-first party photo game. Two modes: <span className="badge">Hot Potato</span> &{' '}
-          <span className="badge">Prompt Showdown</span>.
+          Phone-first party photo game. Two modes:{" "}
+          <span className="px-2 py-0.5 rounded bg-white/10">Hot Potato</span> &{" "}
+          <span className="px-2 py-0.5 rounded bg-white/10">Prompt Showdown</span>.
         </p>
 
         <input
-          className="input"
+          className="w-full rounded bg-white/5 border border-white/10 px-3 py-2 outline-none"
           placeholder="Your name"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
 
-        <button className="btn w-full" onClick={createRoom} disabled={makingRoom}>
-          {makingRoom ? 'Creating…' : 'Create Room'}
+        <button
+          className="w-full rounded bg-blue-600 hover:bg-blue-500 px-4 py-2 font-semibold"
+          disabled={busy}
+          onClick={createRoom}
+        >
+          {busy ? "Creating…" : "Create Room"}
         </button>
 
         <div className="flex gap-2 items-center">
           <input
-            className="input flex-1"
+            className="flex-1 rounded bg-white/5 border border-white/10 px-3 py-2 outline-none"
             placeholder="Enter code"
             value={code}
             onChange={(e) => setCode(e.target.value)}
           />
-          <button className="btn" onClick={joinRoom}>Join</button>
+          <button
+            className="rounded bg-blue-600 hover:bg-blue-500 px-4 py-2 font-semibold"
+            onClick={joinRoom}
+          >
+            Join
+          </button>
         </div>
 
-        {error && <div className="text-red-400 text-sm">{error}</div>}
-
-        <div className="text-xs text-slate-400">
-          Socket URL in use: <code>{SOCKET_URL}</code>
-        </div>
+        <p className="text-xs text-slate-400">
+          Open on a TV/laptop for the host screen. Players join with the room code on their phones.
+        </p>
       </div>
     </div>
   );
