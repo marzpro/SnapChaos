@@ -6,6 +6,7 @@ import { getSocket } from "../../lib/socket";
 export default function Room() {
   const router = useRouter();
   const { code } = router.query;
+
   const name = useMemo(
     () => (router.query.name ? String(router.query.name) : "Player"),
     [router.query.name]
@@ -13,13 +14,20 @@ export default function Room() {
   const isHost = useMemo(() => router.query.host === "1", [router.query.host]);
 
   const [socketOk, setSocketOk] = useState(false);
-  const [players, setPlayers] = useState([]);
+  const [players, setPlayers] = useState([]);     // raw payload
   const [phase, setPhase] = useState("lobby");
   const [lastEvent, setLastEvent] = useState("");
+  const [lastError, setLastError] = useState("");
+
+  // Safely convert whatever we got into a list of names for display
+  const playerNames = useMemo(() => {
+    return (players || []).map((p) =>
+      typeof p === "string" ? p : (p?.name ?? "Player")
+    );
+  }, [players]);
 
   useEffect(() => {
     if (!code) return;
-
     let mounted = true;
 
     (async () => {
@@ -30,8 +38,8 @@ export default function Room() {
       const onRoomUpdate = (data) => {
         if (!mounted) return;
         setLastEvent("room_update");
-        setPlayers(data.players || []);
-        setPhase(data.phase || "lobby");
+        setPlayers(data?.players ?? []);
+        setPhase(data?.phase ?? "lobby");
       };
       const onGameStarted = () => {
         if (!mounted) return;
@@ -42,18 +50,17 @@ export default function Room() {
       socket.on("room_update", onRoomUpdate);
       socket.on("game_started", onGameStarted);
 
-      // Host already created the room with this SAME socket (from lobby).
-      // If this is a player, join now.
       if (!isHost) {
+        // Join as player
         socket.emit(
           "join_room",
           { code: String(code).toUpperCase(), name },
           (resp) => {
-            if (resp?.error) alert(resp.error);
+            if (resp?.error) setLastError(resp.error);
           }
         );
       } else {
-        // Ask for current room state so host sees players immediately
+        // Host asks for current state
         socket.emit("get_room_state", { code: String(code).toUpperCase() });
       }
 
@@ -69,12 +76,23 @@ export default function Room() {
   }, [code, name, isHost]);
 
   const startGame = async () => {
+    setLastError("");
     const socket = await getSocket();
-    if (!socket) return alert("Not connected to server");
+    if (!socket) {
+      setLastError("Not connected to server");
+      return;
+    }
     socket.emit(
       "start_game",
       { code: String(code).toUpperCase() },
-      (resp) => resp?.error && alert(resp.error)
+      (resp) => {
+        if (resp?.error) {
+          setLastError(resp.error);        // <- show why it didn’t start
+        } else {
+          // server will also emit "game_started" which flips phase for everyone
+          setLastEvent("start_game_ok");
+        }
+      }
     );
   };
 
@@ -92,15 +110,22 @@ export default function Room() {
         </div>
 
         <div className="rounded-lg bg-white/5 border border-white/10 p-4 space-y-2">
-          <div className="font-semibold">Players: {players.length ? players.join(", ") : "—"}</div>
+          <div className="font-semibold">
+            Players: {playerNames.length ? playerNames.join(", ") : "—"}
+          </div>
           <div className="text-sm text-slate-300">
             {phase === "lobby" && (isHost ? "Waiting for players…" : "Waiting for host…")}
             {phase === "playing" && "Game started!"}
           </div>
+
           <div className="text-xs text-slate-400 mt-2">
-            Socket: {process.env.NEXT_PUBLIC_SOCKET_URL} {socketOk ? "✅" : "❌"}
-            <br />
-            connected • last event: {lastEvent || "—"}
+            Socket: {process.env.NEXT_PUBLIC_SOCKET_URL} {socketOk ? "✅" : "❌"}<br/>
+            role: {isHost ? "host" : "player"} • phase: {phase} • last event: {lastEvent || "—"}
+            {lastError ? (
+              <>
+                <br />⚠️ <span className="text-red-300">{lastError}</span>
+              </>
+            ) : null}
           </div>
         </div>
 
