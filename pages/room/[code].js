@@ -48,7 +48,7 @@ export default function RoomPage() {
     () => (router.query.name ? String(router.query.name) : "Player"),
     [router.query.name]
   );
-  const isHost = useMemo(() => {
+  const wantsHost = useMemo(() => {
     const v = String(router.query.host || "");
     return v === "1" || v.toLowerCase() === "true";
   }, [router.query.host]);
@@ -58,6 +58,8 @@ export default function RoomPage() {
   const [socketOk, setSocketOk] = useState(false);
   const [lastEvent, setLastEvent] = useState("-");
   const [lastError, setLastError] = useState("");
+  const [amHost, setAmHost] = useState(false);
+  const [socketId, setSocketId] = useState("");
 
   // connect + join/claim
   useEffect(() => {
@@ -68,58 +70,114 @@ export default function RoomPage() {
       const socket = await getSocket();
       if (!socket || !mounted) return;
 
-      setSocketOk(socket.connected);
+      const applyRoomState = (state) => {
+        if (!mounted || !state) return;
+        const list = Array.isArray(state.players) ? state.players : [];
+        setPlayers(list);
+        setPhase(state.started ? "playing" : "lobby");
+        if (socket.id) {
+          const me = list.find((p) => p?.id === socket.id);
+          setAmHost(Boolean(me?.isHost));
+        }
+      };
 
-      const onRoomUpdate = (data) => {
+      const joinPayload = { code, name };
+      if (wantsHost) joinPayload.isHost = true;
+
+      const handleJoinAck = (err, state) => {
+        if (!mounted) return;
+        if (err) {
+          const message =
+            typeof err === "string"
+              ? err
+              : err?.message || "Unable to join the room.";
+          setLastError(message);
+          return;
+        }
+        setLastError("");
+        setLastEvent("join_ack");
+        applyRoomState(state);
+      };
+
+      const onRoomUpdate = (state) => {
         if (!mounted) return;
         setLastEvent("room_update");
-        setPlayers(Array.isArray(data?.players) ? data.players : []);
-        setPhase(data?.phase || "lobby");
+        applyRoomState(state);
       };
+
       const onGameStarted = () => {
         if (!mounted) return;
         setLastEvent("game_started");
         setPhase("playing");
       };
 
+      const onConnect = () => {
+        if (!mounted) return;
+        setSocketOk(true);
+        setSocketId(socket.id || "");
+        socket.emit("join_room", joinPayload, handleJoinAck);
+      };
+
+      const onDisconnect = () => {
+        if (!mounted) return;
+        setSocketOk(false);
+      };
+
+      const onConnectError = (err) => {
+        if (!mounted) return;
+        setLastError(err?.message || "Socket connection error");
+      };
+
+      setSocketOk(socket.connected);
+      setSocketId(socket.id || "");
+
       socket.on("room_update", onRoomUpdate);
       socket.on("game_started", onGameStarted);
+      socket.on("connect", onConnect);
+      socket.on("disconnect", onDisconnect);
+      socket.on("connect_error", onConnectError);
 
-      if (isHost) {
-        // Re-claim host when the host lands on the room page (socket id changed)
-        socket.emit("claim_host", { code }, (resp) => {
-          if (resp?.error) setLastError(resp.error);
-          socket.emit("get_room_state", { code });
-        });
-      } else {
-        // Normal player join
-        socket.emit("join_room", { code, name }, (resp) => {
-          if (resp?.error) setLastError(resp.error);
-        });
+      if (socket.connected) {
+        onConnect();
       }
 
       return () => {
         socket.off("room_update", onRoomUpdate);
         socket.off("game_started", onGameStarted);
+        socket.off("connect", onConnect);
+        socket.off("disconnect", onDisconnect);
+        socket.off("connect_error", onConnectError);
       };
     })();
 
     return () => {
       mounted = false;
     };
-  }, [code, name, isHost]);
+  }, [code, name, wantsHost]);
 
   const startGame = async () => {
+    if (!amHost) {
+      setLastError("Only the host can start the game.");
+      return;
+    }
     setLastError("");
     const socket = await getSocket();
     if (!socket) return;
-    socket.emit("start_game", { code }, (resp) => {
-      if (resp?.error) setLastError(resp.error);
-      else setLastEvent("start_game_ok");
+    socket.emit("start_game", { code }, (err) => {
+      if (err) {
+        const message =
+          typeof err === "string"
+            ? err
+            : err?.message || "Unable to start the game.";
+        setLastError(message);
+        return;
+      }
+      setLastError("");
+      setLastEvent("start_game_ok");
     });
   };
 
-  const statusLine = isHost
+  const statusLine = amHost
     ? phase === "lobby"
       ? "Waiting for players..."
       : "Game in progress…"
@@ -143,7 +201,16 @@ export default function RoomPage() {
         <div className="rounded-xl bg-slate-800/70 p-4 space-y-2">
           <p className="font-semibold">
             Players:{" "}
-            {players.length ? players.join(", ") : <span>—</span>}
+            {players.length ? (
+              players
+                .map((p) => {
+                  const label = p?.name || "Player";
+                  return p?.isHost ? `${label} ⭐` : label;
+                })
+                .join(", ")
+            ) : (
+              <span>—</span>
+            )}
           </p>
           <p className="text-slate-300">{statusLine}</p>
 
@@ -158,13 +225,17 @@ export default function RoomPage() {
             <div>
               connected • last event: <span className="font-mono">{lastEvent}</span>
             </div>
+            <div>
+              me: <span className="font-mono">{socketId || "—"}</span>{" "}
+              {amHost ? "(host)" : ""}
+            </div>
             {lastError ? (
               <div className="text-amber-300">⚠️ {lastError}</div>
             ) : null}
           </div>
         </div>
 
-        {isHost ? (
+        {amHost ? (
           <button
             onClick={startGame}
             disabled={phase !== "lobby" || players.length === 0}

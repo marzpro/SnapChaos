@@ -36,7 +36,11 @@ export default function Lobby() {
           return;
         }
         socket.disconnect();
-        router.push(`/room/${code}?name=${encodeURIComponent(name || "Host")}`);
+        const search = new URLSearchParams({
+          name: name || "Host",
+          host: "1",
+        });
+        router.push(`/room/${code}?${search.toString()}`);
       });
     } catch (err) {
       console.error(err);
