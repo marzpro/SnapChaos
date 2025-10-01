@@ -72,20 +72,50 @@ export default function RoomPage() {
 
       const applyRoomState = (state) => {
         if (!mounted || !state) return;
-        const list = Array.isArray(state.players) ? state.players : [];
-        setPlayers(list);
-        setPhase(state.started ? "playing" : "lobby");
+
+        const rawPlayers = Array.isArray(state.players) ? state.players : [];
+        const normalized = rawPlayers.map((p) => {
+          if (!p || typeof p !== "object") {
+            const label = String(p || "Player");
+            return { id: label, name: label, isHost: false };
+          }
+          const id = p.id || p.sid || "";
+          const name = p.name || p.label || "Player";
+          const isHost = Boolean(
+            p.isHost ||
+              (state.hostId && (state.hostId === id || state.hostId === p.sid))
+          );
+          return { id, name, isHost };
+        });
+
+        setPlayers(normalized);
+
+        const phaseValue =
+          state.started || state.phase === "playing" ? "playing" : "lobby";
+        setPhase(phaseValue);
+
         if (socket.id) {
-          const me = list.find((p) => p?.id === socket.id);
-          setAmHost(Boolean(me?.isHost));
+          const me = normalized.find((p) => p?.id === socket.id);
+          const amHostNow =
+            Boolean(me?.isHost) || state.hostId === socket.id || false;
+          setAmHost(amHostNow);
         }
       };
 
       const joinPayload = { code, name };
       if (wantsHost) joinPayload.isHost = true;
 
-      const handleJoinAck = (err, state) => {
+      const handleJoinAck = (errLike, stateLike) => {
         if (!mounted) return;
+        let err = errLike;
+        let state = stateLike;
+
+        // Some socket servers respond with a single "state" argument.
+        if (!state && err && typeof err === "object" && Array.isArray(err.players)) {
+          state = err;
+          err = null;
+        }
+
         if (err) {
           const message =
             typeof err === "string"
@@ -94,6 +124,7 @@ export default function RoomPage() {
           setLastError(message);
           return;
         }
+
         setLastError("");
         setLastEvent("join_ack");
         applyRoomState(state);
