@@ -106,6 +106,9 @@ export default function RoomPage() {
       if (wantsHost) joinPayload.isHost = true;
 
       const handleJoinAck = (errLike, stateLike) => {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("join_room ack", errLike, stateLike);
+        }
         if (!mounted) return;
         let err = errLike;
         let state = stateLike;
@@ -134,6 +137,7 @@ export default function RoomPage() {
         if (!mounted) return;
         setLastEvent("room_update");
         applyRoomState(state);
+        setLastError("");
       };
 
       const onGameStarted = () => {
