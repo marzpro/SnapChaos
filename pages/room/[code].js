@@ -216,7 +216,7 @@ export default function RoomPage() {
 
       // Some servers echo back state; fall back to forcing local phase when ok.
       const response = respLike && typeof respLike === "object" ? respLike : {};
-      if (response.started || response.phase === "playing") {
+      if (response.started || response.phase === "playing" || response.ok) {
         setPhase("playing");
       }
     });
