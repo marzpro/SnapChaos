@@ -15,6 +15,7 @@ export default function handler(req, res) {
     res.socket.server.io = io;
 
     io.on('connection', (socket) => {
+      console.log('[api/socket] connected', socket.id);
       const ensureRoom = (code) => {
         if (!rooms.has(code)) {
           rooms.set(code, {
@@ -40,19 +41,27 @@ export default function handler(req, res) {
         room.hostId = socket.id;
         room.players.set(socket.id, { name: name || 'Host', score: 0 });
         socket.join(code);
+        console.log('[api/socket] create_room', { code, socket: socket.id });
         cb && cb({ code });
         io.to(code).emit('room_update', serializeRoom(room));
       });
 
-      socket.on('join_room', ({ code, name }, cb) => {
+      socket.on('join_room', ({ code, name, isHost }, cb) => {
         const room = ensureRoom(code);
         room.players.set(socket.id, { name: name || 'Guest', score: 0 });
         socket.join(code);
 
-        // ✅ Important fix: if there’s no host yet, make this player the host
-        if (!room.hostId) {
+        if (!room.hostId || isHost) {
           room.hostId = socket.id;
         }
+
+        console.log('[api/socket] join_room', {
+          code,
+          socket: socket.id,
+          hostId: room.hostId,
+          isHost,
+          players: room.players.size,
+        });
 
         cb && cb({ ok: true, room: serializeRoom(room) });
         io.to(code).emit('room_update', serializeRoom(room));
@@ -61,15 +70,22 @@ export default function handler(req, res) {
       socket.on('start_game', ({ code }, cb) => {
         const room = rooms.get(code);
         if (!room) {
+          console.log('[api/socket] start_game missing room', { code, socket: socket.id });
           cb && cb({ message: 'Room not found' });
           return;
         }
         if (room.hostId !== socket.id) {
+          console.log('[api/socket] start_game rejected', {
+            code,
+            socket: socket.id,
+            hostId: room.hostId,
+          });
           cb && cb({ message: 'Only host can start the game.' });
           return;
         }
 
         room.phase = 'playing';
+        console.log('[api/socket] start_game ok', { code, socket: socket.id });
         io.to(code).emit('game_started');
         io.to(code).emit('room_update', serializeRoom(room));
         cb && cb(null, { ok: true, phase: room.phase });
@@ -161,6 +177,7 @@ export default function handler(req, res) {
       });
 
       socket.on('disconnect', () => {
+        console.log('[api/socket] disconnected', socket.id);
         for (const room of rooms.values()) {
           if (room.players.has(socket.id)) {
             room.players.delete(socket.id);
