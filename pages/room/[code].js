@@ -60,6 +60,7 @@ export default function RoomPage() {
   const [lastError, setLastError] = useState("");
   const [amHost, setAmHost] = useState(false);
   const [socketId, setSocketId] = useState("");
+  const [debugState, setDebugState] = useState(null);
 
   // connect + join/claim
   useEffect(() => {
@@ -72,6 +73,8 @@ export default function RoomPage() {
 
       const applyRoomState = (state) => {
         if (!mounted || !state) return;
+
+        setDebugState(state);
 
         const rawPlayers = Array.isArray(state.players) ? state.players : [];
         const normalized = rawPlayers.map((p) => {
@@ -92,6 +95,7 @@ export default function RoomPage() {
 
         const phaseValue =
           state.started || state.phase === "playing" ? "playing" : "lobby";
+        console.log("room_update state", state, "phase", phaseValue);
         setPhase(phaseValue);
 
         if (socket.id) {
@@ -198,10 +202,9 @@ export default function RoomPage() {
     setLastError("");
     const socket = await getSocket();
     if (!socket) return;
+    console.log("start_game emit", { code, socketId: socket.id });
     socket.emit("start_game", { code }, (errLike, respLike) => {
-      if (process.env.NODE_ENV !== "production") {
-        console.debug("start_game ack", errLike, respLike);
-      }
+      console.log("start_game ack", errLike, respLike);
       if (errLike) {
         const message =
           typeof errLike === "string"
@@ -274,6 +277,17 @@ export default function RoomPage() {
               me: <span className="font-mono">{socketId || "—"}</span>{" "}
               {amHost ? "(host)" : ""}
             </div>
+            <div>
+              phase: <span className="font-mono">{phase}</span>
+            </div>
+            {debugState ? (
+              <div>
+                started flag: {String(Boolean(debugState.started))}
+                {debugState.phase
+                  ? ` • raw phase: ${String(debugState.phase)}`
+                  : null}
+              </div>
+            ) : null}
             {lastError ? (
               <div className="text-amber-300">⚠️ {lastError}</div>
             ) : null}
