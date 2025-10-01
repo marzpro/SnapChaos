@@ -45,9 +45,11 @@ io.on("connection", (socket) => {
   console.log("✅ connected:", socket.id);
 
   socket.on("create_room", ({ name }, ack) => {
+    console.log("➡️ create_room", { sock: socket.id, name });
     const code = makeCode();
     rooms.set(code, { started: false, hostId: null, players: new Map() });
     ack?.({ code });
+    console.log("✅ room created", code);
   });
 
   socket.on("join_room", (payload, ack) => {
@@ -60,6 +62,7 @@ io.on("connection", (socket) => {
     }
     const room = rooms.get(code);
 
+    console.log("➡️ join_room", { code, socket: socket.id, name, isHost });
     socket.join(code);
 
     // set host if requested and none set yet
@@ -75,14 +78,24 @@ io.on("connection", (socket) => {
     ack?.(null, getPublicState(room));
     // notify everyone in the room
     io.to(code).emit("room_update", getPublicState(room));
+    console.log("✅ join_room handled", {
+      code,
+      hostId: room.hostId,
+      players: room.players.size,
+    });
   });
 
   socket.on("start_game", ({ code }, ack) => {
     code = (code || "").toUpperCase();
+    console.log("➡️ start_game", { code, socket: socket.id });
     const room = rooms.get(code);
-    if (!room) return ack?.({ message: "Room not found" });
+    if (!room) {
+      console.log("❌ start_game no room", code);
+      return ack?.({ message: "Room not found" });
+    }
 
     if (socket.id !== room.hostId) {
+      console.log("❌ start_game bad host", { code, socket: socket.id, hostId: room.hostId });
       return ack?.({ message: "Only host can start" });
     }
 
@@ -90,6 +103,7 @@ io.on("connection", (socket) => {
     io.to(code).emit("game_started");
     io.to(code).emit("room_update", getPublicState(room));
     ack?.(null, { ok: true });
+    console.log("✅ start_game ok", { code, socket: socket.id });
   });
 
   socket.on("leave_room", ({ code }) => {
