@@ -21,6 +21,7 @@ export default function handler(req, res) {
             code,
             hostId: null,
             players: new Map(),
+            phase: 'lobby',
             mode: null,
             round: 0,
             prompt: null,
@@ -57,9 +58,27 @@ export default function handler(req, res) {
         io.to(code).emit('room_update', serializeRoom(room));
       });
 
+      socket.on('start_game', ({ code }, cb) => {
+        const room = rooms.get(code);
+        if (!room) {
+          cb && cb({ message: 'Room not found' });
+          return;
+        }
+        if (room.hostId !== socket.id) {
+          cb && cb({ message: 'Only host can start the game.' });
+          return;
+        }
+
+        room.phase = 'playing';
+        io.to(code).emit('game_started');
+        io.to(code).emit('room_update', serializeRoom(room));
+        cb && cb(null, { ok: true, phase: room.phase });
+      });
+
       socket.on('start_round', ({ code, mode, durationSec }, cb) => {
         const room = rooms.get(code);
         if (!room || room.hostId !== socket.id) return;
+        room.phase = 'playing';
         room.mode = mode;
         room.round += 1;
         room.prompt = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
@@ -137,6 +156,7 @@ export default function handler(req, res) {
           winners,
           scores: serializeScores(room),
         });
+        room.phase = 'lobby';
         cb && cb({ ok: true });
       });
 
@@ -162,6 +182,7 @@ function serializeRoom(room) {
     code: room.code,
     hostId: room.hostId,
     players: Array.from(room.players, ([sid, p]) => ({ sid, name: p.name, score: p.score })),
+    phase: room.phase || 'lobby',
     mode: room.mode,
     round: room.round,
   };
