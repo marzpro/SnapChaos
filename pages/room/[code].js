@@ -198,17 +198,27 @@ export default function RoomPage() {
     setLastError("");
     const socket = await getSocket();
     if (!socket) return;
-    socket.emit("start_game", { code }, (err) => {
-      if (err) {
+    socket.emit("start_game", { code }, (errLike, respLike) => {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("start_game ack", errLike, respLike);
+      }
+      if (errLike) {
         const message =
-          typeof err === "string"
-            ? err
-            : err?.message || "Unable to start the game.";
+          typeof errLike === "string"
+            ? errLike
+            : errLike?.message || "Unable to start the game.";
         setLastError(message);
         return;
       }
+
       setLastError("");
-      setLastEvent("start_game_ok");
+      setLastEvent("start_game_ack");
+
+      // Some servers echo back state; fall back to forcing local phase when ok.
+      const response = respLike && typeof respLike === "object" ? respLike : {};
+      if (response.started || response.phase === "playing") {
+        setPhase("playing");
+      }
     });
   };
 
