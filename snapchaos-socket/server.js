@@ -66,13 +66,20 @@ io.on("connection", (socket) => {
     socket.join(code);
 
     // set host if requested and none set yet
-    if (isHost && !room.hostId) room.hostId = socket.id;
+    if (isHost || !room.hostId) {
+      room.hostId = socket.id;
+    }
 
     room.players.set(socket.id, {
       id: socket.id,
       name,
       isHost: socket.id === room.hostId,
     });
+
+    // ensure only the host entry has isHost=true
+    for (const [, player] of room.players) {
+      player.isHost = player.id === room.hostId;
+    }
 
     // reply to the joiner with current state
     ack?.(null, getPublicState(room));
